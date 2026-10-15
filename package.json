@@ -1,0 +1,35 @@
+{
+  "name": "cnb2api",
+  "version": "2.0.0",
+  "description": "CNB workspace AI as a Magpie provider. MQTT presence for drifting *.cnb.run URLs; chat stays on HTTPS.",
+  "type": "module",
+  "main": "./plugin/index.mjs",
+  "exports": {
+    ".": "./plugin/index.mjs",
+    "./server": "./plugin/index.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "cnb2api-quota": "bin/cnb2api-quota.mjs"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "quota": "node bin/cnb2api-quota.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "mqtt": "^5.14.1"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "cnb",
+    "magpie"
+  ],
+  "magpie": {
+    "maxConcurrency": 2
+  },
+  "license": "MIT"
+}

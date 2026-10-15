@@ -1,0 +1,53 @@
+# CNB pipeline: keepalive cron + vscode workspace running the HTTP proxy.
+#
+# Magpie-only path: set MQTT_BROKER / MQTT_TOPIC / MQTT_PSK (same three
+# values you type into `magpie plugin login cnb2api`). The proxy publishes
+# its drifting *.cnb.run URI + PROXY_KEY on that topic. No nginx relay.
+#
+# Fastest path: fork private and inline the secrets below.
+
+main:
+  "crontab: */5 * * * *":
+    - name: keepalive
+      docker:
+        image: cnbcool/default-dev-env:latest
+      env:
+        REPO: $CNB_REPO_SLUG
+      stages:
+        - name: ensure-workspace
+          script: |
+            set -uo pipefail
+            API="https://api.cnb.cool"
+            CODE=$(curl -s --max-time 20 -o /tmp/l.json -w '%{http_code}' "$API/workspace/list?slug=$REPO" -H "Authorization: Bearer $CNB_TOKEN")
+            echo "list http=$CODE"
+            if [ "$CODE" != "200" ]; then echo "DEGRADED: list http $CODE"; exit 0; fi
+            RUNNING=$(jq -r '[(.list // .data // [])[]? | select(.status=="running")][0].sn // empty' /tmp/l.json 2>/dev/null || true)
+            if [ -z "$RUNNING" ]; then
+              echo "no running workspace -> start"
+              curl -s --max-time 60 -X POST "$API/$REPO/-/workspace/start" -H "Authorization: Bearer $CNB_TOKEN" -H "Content-Type: application/json" -d '{"branch":"main"}' | head -c 200; echo
+              exit 0
+            fi
+            echo "running sn=$RUNNING"
+
+$:
+  vscode:
+    - docker:
+        image: cnbcool/default-dev-env:latest
+      env:
+        PROXY_KEY: "sk-set-your-own-long-random-key"
+        MQTT_BROKER: "mqtt://broker.example.com:1883"
+        MQTT_TOPIC: "cnb2api/my-fleet/presence"
+        MQTT_PSK: "set-a-long-random-fleet-key"
+        MQTT_INSTANCE_ID: "ws-1"
+      runner:
+        cpus: 2
+      services:
+        - name: vscode
+          options:
+            keepAliveTimeout: 18h
+        - docker
+      stages:
+        - name: start-ai-proxy
+          script: |
+            set -euo pipefail
+            bash "$(pwd)/deploy/start.sh"
