@@ -20,8 +20,8 @@ MQTT **只做控制面**：一个固定 topic，所有工作区往上发元数�
 - 谁在线、现在的域名和 Key 是什么，都从这条流里长出来
 
 ```
-                    MQTT  cnb2api/v1/{fleet}/presence
-                    （一条 topic，多实例心跳）
+                    MQTT  事先约定的那一条 topic
+                    （多实例往上发心跳）
          ┌──────────────────────────────────────────────┐
          │  {instanceId, uri, apiKey, ts}  加密          │
          │                                              │
@@ -39,29 +39,31 @@ MQTT **只做控制面**：一个固定 topic，所有工作区往上发元数�
 
 ---
 
-## 2. Topic 怎么「固定」
+## 2. 事先约定的三样（舰队契约）
 
-插件侧只有一个订阅，名字对整个舰队恒定。不要写成公开字面量
-`cnb2api/presence`（共用 Broker 上谁都能盯着密文刷）。
+Magpie 和所有实例**启动前就必须一致**，缺一不可。运行时不再协商。
 
-用**舰队密钥**派生一次：
+| # | 约定 | 例子 | 谁填 |
+|---|---|---|---|
+| 1 | **MQTT 连接方式** | `wss://broker.example.com/mqtt`，可选用户名/密码、`mqtt://host:1883` | 插件登录 + 工作区 `MQTT_BROKER`（及 `MQTT_USER` / `MQTT_PASS`） |
+| 2 | **MQTT Topic** | `cnb2api/my-fleet/presence`（整支舰队同一条，自己起名） | 插件登录 + 工作区 `MQTT_TOPIC` |
+| 3 | **对称密钥** | 长随机串，AES-256-GCM 加密心跳明文 | 插件登录（password）+ 工作区 `MQTT_PSK` |
+
+这三样是唯一的预共享秘密。**不预共享、也不从密钥派生 topic。**
+动态域名、`PROXY_KEY`、`instanceId` 都是实例上线后从加密心跳里长出来的。
+
+插件登录三次提问，`authorize` 用这三样连上并订 topic；几秒内解开一条
+URI 合法的心跳即成功。`accountId` 用 `sha256(broker + topic)` 短哈希，
+同一契约重登覆盖同一账号。
+
+工作区：
 
 ```
-fleet = base64url( HMAC-SHA256(psk, "cnb2api/mqtt/v1/fleet") [0:16] )
-topic = cnb2api/v1/{fleet}/presence
+MQTT_BROKER=wss://broker.example.com/mqtt
+MQTT_TOPIC=cnb2api/my-fleet/presence
+MQTT_PSK=…
+MQTT_INSTANCE_ID=ws-home    # 仅舰队内区分实例，插件事先不用知道
 ```
-
-同一把 PSK → 同一条 topic。插件登录时只拿 Broker + PSK；
-工作区配同一把 `MQTT_PSK`。没有第三份「topic 配置」。
-
-登录 prompt：
-
-- Broker URL（可有共用默认值）
-- 舰队 PSK（`type: "password"`）
-
-`authorize` 订上这条 topic，在几秒内收到至少一条能解开、URI 合法的
-心跳即成功；超时则 `{ type: "failed" }`。`accountId` 用 `fleet` 短哈希，
-重登同一把 PSK 覆盖同一个 Magpie 账号。
 
 ---
 
@@ -102,20 +104,13 @@ instances: Map<instanceId, { uri, apiKey, bootId, lastSeen, status }>
   HTTP 请求头用报文里这份。
 - `instanceId`：工作区自己起的名字，表的主键；重复则视为同一实例刷新。
 
-加密：`HKDF-SHA256(psk, salt="cnb2api-mqtt-v1", info="fleet")` →
-AES-256-GCM。AAD 绑 topic。`|now-ts| > 120s` 丢弃。
+加密：`HKDF-SHA256(psk, salt="cnb2api-mqtt-v1", info=topic)` →
+AES-256-GCM。AAD 绑约定 topic。`|now-ts| > 120s` 丢弃。
+密钥只加密 MQTT 内容，不参与 HTTPS。
 
-同一把舰队 PSK 的实例能互相解密——这是共用 topic 的代价，可接受。
-Broker 运营方看不到域名和 Key。
-
-工作区环境变量：
-
-```
-MQTT_BROKER=wss://broker.example.com/mqtt
-MQTT_PSK=…                 # 和 Magpie 登录同一把
-MQTT_INSTANCE_ID=ws-home   # 舰队内唯一
-# PROXY_KEY 已有，打进心跳
-```
+同一契约下的实例能互相解密——共用 topic + 共用密钥的代价。
+Broker 运营方看不到域名和 Key。Topic 本身在共用 Broker 上可见，
+所以不要用别人一眼能猜到的名字，但**安全不靠 topic 保密，靠密钥**。
 
 ---
 
@@ -157,10 +152,10 @@ MQTT_INSTANCE_ID=ws-home   # 舰队内唯一
 |---|---|
 | Broker 读对话 | 对话不进 MQTT |
 | Broker 读到域名 / API Key | 整包 AES-GCM |
-| 他人订到你的 topic | topic 由 PSK 派生，不可猜 |
+| 他人订到同一 topic | 解不开密文（没有第 3 项密钥） |
 | 伪造 URI / 换 Key | 解不开或 URI 正则失败则丢 |
 | 重放已回收的旧 URI | ts 窗口；HTTPS 失败换实例 |
-| 舰队 PSK 泄漏 | 等于拿到所有实例的域名和 Key，只能换 PSK |
+| 三样契约泄漏 | 等于加入舰队，换 topic 或换密钥 |
 
 `CNB_TOKEN` 仍然不出工作区。
 
@@ -171,6 +166,6 @@ MQTT_INSTANCE_ID=ws-home   # 舰队内唯一
 1. 工作区：心跳 publish `{instanceId, uri, apiKey}` 到舰队 topic
 2. 插件：单订阅、内存表、TTL、HTTPS `fetch` 选实例
 3. 多实例同时在线时的选路 / 失败换人
-4. 文档：PSK 怎么分发、`MQTT_INSTANCE_ID` 不要撞名
+4. 文档：三样契约怎么发给工作区和 Magpie；`MQTT_INSTANCE_ID` 不要撞名
 
 不在范围：每实例一条 topic、SSE over MQTT、删掉 nginx 中继。
