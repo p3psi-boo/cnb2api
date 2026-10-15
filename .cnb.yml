@@ -1,10 +1,29 @@
-# CNB pipeline: keepalive cron + vscode workspace running the HTTP proxy.
+# CNB pipeline for the Magpie-only cnb2api.
 #
-# Magpie-only path: set MQTT_BROKER / MQTT_TOPIC / MQTT_PSK (same three
-# values you type into `magpie plugin login cnb2api`). The proxy publishes
-# its drifting *.cnb.run URI + PROXY_KEY on that topic. No nginx relay.
+# Two event blocks:
+#  1. `main` crontab — keepalive (every 5 min). Uses a fresh short-lived
+#     CNB_TOKEN. No long-lived platform token is stored.
+#  2. `$: vscode` — the workspace that runs the HTTP proxy and MQTT heartbeat.
 #
-# Fastest path: fork private and inline the secrets below.
+# Magpie and every instance must share the same three values (the fleet
+# contract). Type the same strings into `magpie plugin login cnb2api`:
+#   MQTT_BROKER         how to connect, prefer wss:// on 443
+#   MQTT_TOPIC          one topic for the whole fleet
+#   MQTT_PSK            AES-256-GCM key for the heartbeat payload
+# Plus, only on the workspace:
+#   PROXY_KEY           HTTP Bearer the plugin learns from the heartbeat
+#   MQTT_INSTANCE_ID    unique name inside the fleet (ws-home, ws-2, …)
+#
+# CNB_VSCODE_PROXY_URI is injected by the platform; the process publishes it.
+# Do not set REGISTER_URL / REG_TOKEN — there is no nginx relay.
+#
+# Fastest path: fork this repo **private** and inline the secrets below.
+# Cleaner path: put them in a private secrets repo and `imports:` it.
+# `env:` overrides `imports:`, so delete the inline block when you switch.
+# The crontab key is `main:` — rename it if your default branch is not main.
+#
+# Cron dormancy: CNB may pause crons if the repo has no commits for days.
+# Push occasionally so the workspace keeps getting restarted.
 
 main:
   "crontab: */5 * * * *":
@@ -33,12 +52,19 @@ $:
   vscode:
     - docker:
         image: cnbcool/default-dev-env:latest
+      # Private fork: generate secrets with `openssl rand -hex 24`.
+      # Do not ship the placeholders. To use a secrets repo, DELETE this
+      # whole env: block and uncomment imports: below.
       env:
         PROXY_KEY: "sk-set-your-own-long-random-key"
-        MQTT_BROKER: "mqtt://broker.example.com:1883"
+        MQTT_BROKER: "wss://broker.example.com/mqtt"
         MQTT_TOPIC: "cnb2api/my-fleet/presence"
         MQTT_PSK: "set-a-long-random-fleet-key"
         MQTT_INSTANCE_ID: "ws-1"
+        # MQTT_USER: ""
+        # MQTT_PASS: ""
+      # imports:
+      #   - https://cnb.cool/YOUR_ORG/your-secrets-repo/-/blob/main/proxy.yml
       runner:
         cpus: 2
       services:
