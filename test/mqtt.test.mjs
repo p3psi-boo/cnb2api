@@ -7,6 +7,15 @@ import { createFleet, rewriteToInstance, withInstanceAuth, fleetAccountId } from
 import { startAdvertise } from '../src/mqtt/advertise.mjs';
 import { subscribeFleet } from '../src/mqtt/subscribe.mjs';
 import { fetchViaFleet } from '../src/plugin-hooks.mjs';
+import { DEFAULT_BROKER, resolveBroker } from '../src/mqtt/defaults.mjs';
+
+test('resolveBroker defaults to public EMQX and keeps edits', () => {
+  assert.equal(resolveBroker(''), DEFAULT_BROKER);
+  assert.equal(resolveBroker('   '), DEFAULT_BROKER);
+  assert.equal(resolveBroker(undefined), DEFAULT_BROKER);
+  assert.equal(DEFAULT_BROKER, 'wss://broker.emqx.io:8084/mqtt');
+  assert.equal(resolveBroker('wss://mine.example/mqtt'), 'wss://mine.example/mqtt');
+});
 
 test('crypto roundtrip binds ciphertext to topic', () => {
   const env = seal('hello', 'psk', 'fleet/a');

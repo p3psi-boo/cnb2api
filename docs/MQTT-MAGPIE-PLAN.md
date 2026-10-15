@@ -45,7 +45,7 @@ Magpie 和所有实例**启动前就必须一致**，缺一不可。运行时不
 
 | # | 约定 | 例子 | 谁填 |
 |---|---|---|---|
-| 1 | **MQTT 连接方式** | `wss://broker.example.com/mqtt`，可选用户名/密码、`mqtt://host:1883` | 插件登录 + 工作区 `MQTT_BROKER`（及 `MQTT_USER` / `MQTT_PASS`） |
+| 1 | **MQTT 连接方式** | 默认 `wss://broker.emqx.io:8084/mqtt`（EMQX 公共），可改成自己的；可选用户名/密码 | 插件登录可留空；工作区可省略 `MQTT_BROKER` |
 | 2 | **MQTT Topic** | `cnb2api/my-fleet/presence`（整支舰队同一条，自己起名） | 插件登录 + 工作区 `MQTT_TOPIC` |
 | 3 | **对称密钥** | 长随机串，AES-256-GCM 加密心跳明文 | 插件登录（password）+ 工作区 `MQTT_PSK` |
 

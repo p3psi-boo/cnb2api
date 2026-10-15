@@ -1,5 +1,7 @@
 // Central env loading + fail-fast validation.
 // The proxy refuses to start with a missing/weak key instead of running exposed.
+import { resolveBroker } from './mqtt/defaults.mjs';
+
 export const config = {
   port: Number(process.env.PROXY_PORT || 9001),
   repo: process.env.CNB_REPO_SLUG || process.env.CNB_BUILD_REPO || '',
@@ -13,7 +15,7 @@ export const config = {
   authFailWindowMs: 60_000,
   authFailMax: 10,
   upstreamUrl: '',
-  mqttBroker: (process.env.MQTT_BROKER || '').trim(),
+  mqttBroker: resolveBroker(process.env.MQTT_BROKER),
   mqttTopic: (process.env.MQTT_TOPIC || '').trim(),
   mqttPsk: process.env.MQTT_PSK || '',
   mqttUser: process.env.MQTT_USER || '',

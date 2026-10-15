@@ -146,7 +146,7 @@ server.listen(config.port, '0.0.0.0', () => {
       log.error('-', 'mqtt advertise failed', { err: String(e).slice(0, 240) });
     });
   } else {
-    log.info('-', 'mqtt advertise skipped', { reason: 'MQTT_BROKER / MQTT_TOPIC / MQTT_PSK not all set' });
+    log.info('-', 'mqtt advertise skipped', { reason: 'MQTT_TOPIC / MQTT_PSK not set (broker defaults to EMQX public)' });
   }
 });
 

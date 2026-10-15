@@ -7,7 +7,8 @@
 #
 # Magpie and every instance must share the same three values (the fleet
 # contract). Type the same strings into `magpie plugin login cnb2api`:
-#   MQTT_BROKER         how to connect, prefer wss:// on 443
+#   MQTT_BROKER         how to connect. Default is EMQX public
+#                       wss://broker.emqx.io:8084/mqtt — override to use your own.
 #   MQTT_TOPIC          one topic for the whole fleet
 #   MQTT_PSK            AES-256-GCM key for the heartbeat payload
 # Plus, only on the workspace:
@@ -57,7 +58,7 @@ $:
       # whole env: block and uncomment imports: below.
       env:
         PROXY_KEY: "sk-set-your-own-long-random-key"
-        MQTT_BROKER: "wss://broker.example.com/mqtt"
+        MQTT_BROKER: "wss://broker.emqx.io:8084/mqtt"
         MQTT_TOPIC: "cnb2api/my-fleet/presence"
         MQTT_PSK: "set-a-long-random-fleet-key"
         MQTT_INSTANCE_ID: "ws-1"

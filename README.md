@@ -7,14 +7,14 @@ MQTT **只传控制面**：动态 `*.cnb.run` 域名和实例自己的 `PROXY_KE
 
 事先只共享三样：
 
-1. MQTT 连接方式（Broker URL，可选用户名/密码）
+1. MQTT 连接方式（默认 EMQX 公共 Broker `wss://broker.emqx.io:8084/mqtt`，可改）
 2. MQTT Topic（整支舰队同一条）
 3. 对称密钥（AES-256-GCM，加密心跳）
 
 ```
 magpie plugin add .
 magpie plugin login cnb2api
-# 填 broker / topic / 密钥，与工作区 MQTT_* 一致
+# Broker 可留空（EMQX）；Topic / 密钥与工作区 MQTT_* 一致
 ```
 
 多个工作区往同一条 topic 发心跳，插件选一个活着的实例去打 `/v1/chat/completions`。
@@ -25,7 +25,7 @@ magpie plugin login cnb2api
 
 ```
 PROXY_KEY          实例 HTTP 鉴权（会随心跳发给插件）
-MQTT_BROKER        例如 mqtt://broker.example.com:1883 或 wss://…
+MQTT_BROKER        可省略，默认 wss://broker.emqx.io:8084/mqtt
 MQTT_TOPIC         例如 cnb2api/my-fleet/presence
 MQTT_PSK           长随机串
 MQTT_INSTANCE_ID   舰队内唯一，如 ws-home

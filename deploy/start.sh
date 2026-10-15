@@ -30,10 +30,10 @@ for i in $(seq 1 20); do
     echo "===== models ====="
     curl -s --max-time 2 -H "Authorization: Bearer ${PROXY_KEY}" "http://127.0.0.1:${PORT}/v1/models"; echo
     echo "PROXY_URI=${CNB_VSCODE_PROXY_URI:-<env missing>}"
-    if [ -n "${MQTT_BROKER:-}" ] && [ -n "${MQTT_TOPIC:-}" ] && [ -n "${MQTT_PSK:-}" ]; then
-      echo "===== MQTT advertise enabled topic=${MQTT_TOPIC} ====="
+    if [ -n "${MQTT_TOPIC:-}" ] && [ -n "${MQTT_PSK:-}" ]; then
+      echo "===== MQTT advertise enabled broker=${MQTT_BROKER:-wss://broker.emqx.io:8084/mqtt} topic=${MQTT_TOPIC} ====="
     else
-      echo "===== MQTT advertise skipped (MQTT_BROKER / MQTT_TOPIC / MQTT_PSK missing) ====="
+      echo "===== MQTT advertise skipped (MQTT_TOPIC / MQTT_PSK missing) ====="
     fi
     exit 0
   fi

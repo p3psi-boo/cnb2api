@@ -1,5 +1,6 @@
 import { subscribeFleet } from './mqtt/subscribe.mjs';
 import { fleetAccountId, rewriteToInstance, withInstanceAuth } from './mqtt/fleet.mjs';
+import { DEFAULT_BROKER, resolveBroker } from './mqtt/defaults.mjs';
 
 const PROVIDER = 'cnb2api';
 const FALLBACK_MODELS = {
@@ -11,7 +12,7 @@ const FALLBACK_MODELS = {
 const sessions = new Map();
 
 function contractOf(auth) {
-  const broker = auth?.metadata?.broker || '';
+  const broker = resolveBroker(auth?.metadata?.broker);
   const topic = auth?.metadata?.topic || '';
   const psk = auth?.key || '';
   return { broker, topic, psk, username: auth?.metadata?.username || '', password: auth?.metadata?.password || '' };
@@ -94,15 +95,15 @@ export async function createCnb2apiPlugin(_input, options) {
         label: 'MQTT encryption key',
         placeholder: 'fleet PSK',
         prompts: [
-          { type: 'text', key: 'broker', message: 'MQTT broker URL', placeholder: 'wss://broker.example.com/mqtt' },
+          { type: 'text', key: 'broker', message: 'MQTT broker URL (blank = EMQX public)', placeholder: DEFAULT_BROKER },
           { type: 'text', key: 'topic', message: 'MQTT topic', placeholder: 'cnb2api/my-fleet/presence' },
         ],
         async authorize(inputs = {}) {
           const psk = String(inputs.psk || inputs.key || inputs.apiKey || '').trim();
-          const broker = String(inputs.broker || '').trim();
+          const broker = resolveBroker(inputs.broker);
           const topic = String(inputs.topic || '').trim();
-          if (!broker || !topic || !psk) {
-            return { type: 'failed', error: 'broker URL, topic and encryption key are all required' };
+          if (!topic || !psk) {
+            return { type: 'failed', error: 'topic and encryption key are required' };
           }
           try {
             const sub = await subscribeFleet({ brokerUrl: broker, topic, psk, allowLocalUri });
@@ -194,6 +195,7 @@ export { fetchViaFleet, noInstanceResponse };
 export const _internal = {
   PROVIDER,
   FALLBACK_MODELS,
+  DEFAULT_BROKER,
   contractOf,
   sessionKey,
   fetchViaFleet,
