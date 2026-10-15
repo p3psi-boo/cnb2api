@@ -1,169 +1,153 @@
-# cnb2api → Magpie Provider：MQTT 只传动态域名
+# cnb2api → Magpie Provider：单 topic 发现多个实例
 
-对照 [p3psi-boo/cnb2api-magpie](https://github.com/p3psi-boo/cnb2api-magpie)
-和 [Magpie 插件文档](https://usemagpie.ai/docs/zh/plugins)。
+MQTT **只做控制面**：一个固定 topic，所有工作区往上发元数据
+（当前 `*.cnb.run`、`PROXY_KEY`、实例 id）。插件订这一条，在本地
+攒一份在线表。chat / SSE / 模型 / 用量仍 HTTPS 直连各实例自己的域名，
+不进 Broker。
 
-**MQTT 是控制面，只替代 `cnb-register.py` 那一次「当前子域名是什么」。**
-对话、模型列表、用量、SSE 全部仍走 HTTPS，直连
-`https://<sub>-9001.cnb.run`。Broker 上看不到 chat。
-
-上一版曾把整段 `/v1/chat/completions` 打成 MQTT 隧道，范围过大，已废弃。
-
----
-
-## 1. `cnb-register.py` 实际在传什么
-
-它不转发 token，也不碰补全请求。`start.sh` 开机只 POST 一件事：
-
-```json
-{ "uri": "https://<subdomain>-{{port}}.cnb.run" }
-```
-
-中继校验 URI，改 nginx `map`，客户端继续打固定域名。chat 始终是：
-
-```
-客户端 ──HTTPS──▶ nginx ──HTTPS──▶ <漂移子域名>-9001.cnb.run ──▶ cnb2api
-```
-
-Magpie 插件跑在用户本机，自己就能 `fetch` 那个 `*.cnb.run`。
-缺的只是「现在的子域名」——正好是 register 那条消息。用共用 MQTT
-把这条消息发给插件，nginx / VPS / 固定域名都可以去掉。
+这就是 `cnb-register.py` 的多实例版：不再按实例拆 topic，也不再
+每个工作区登录一次 Magpie。
 
 ---
 
-## 2. 目标形态
+## 1. 为什么是一条 topic
+
+按实例派生 topic（`HMAC(psk, instanceId)`）会逼用户「登录 N 次、
+事先知道每个 instanceId」。你要的是反过来：
+
+- 插件启动后 **只订一个事先约定的 topic**
+- 工作区开机自己上来报到
+- 谁在线、现在的域名和 Key 是什么，都从这条流里长出来
 
 ```
-                    MQTT（加密，仅 presence / 当前 URI）
+                    MQTT  cnb2api/v1/{fleet}/presence
+                    （一条 topic，多实例心跳）
          ┌──────────────────────────────────────────────┐
+         │  {instanceId, uri, apiKey, ts}  加密          │
          │                                              │
-    Magpie 插件                                    各 cnb2api 工作区
-    记下 A/B/C 的当前 URL                            开机 publish 一次
-         │                                              │  漂移了再发
-         │  HTTPS  chat / models / usage / SSE          │
-         └──────────▶ https://<sub>-9001.cnb.run  ◀─────┘
+    Magpie 插件  ──订这一条──▶  内存表 A / B / C
+         │
+         │  HTTPS  选一个活着的实例
+         ▼
+    https://<sub-A>-9001.cnb.run     https://<sub-B>-9001.cnb.run
 ```
 
-| 通道 | 承载 | 不承载 |
-|---|---|---|
-| MQTT | 当前 `PROXY_URI`、up/down、`bootId`、可选模型兜底列表 | 请求体、SSE、`CNB_TOKEN`、对话 |
-| HTTPS | 现有 `src/server.mjs` 的全部 API | — |
-
-约束：
-
-1. 同一仓库双入口：cnb2api HTTP 原样保留；根目录再注册 Magpie 插件。
-2. Broker 共用且不可信：presence 对称加密，topic 不可枚举。
-3. 一个插件多个实例：每个工作区 = 一个 Magpie 账号。
-4. 不配 MQTT 时，工作区行为与现在完全一致（仍可走 `cnb-register.py`）。
-
----
-
-## 3. 多实例 = 多次登录
-
-Magpie 对一个 `auth.provider` 可以登录多次，5xx 自动切号。每个账号一份：
-
-| 字段 | 作用 |
+| 通道 | 承载 |
 |---|---|
-| `brokerUrl` | 共用 Broker，优先 `wss://` |
-| `instanceId` | 账号名，派生 topic |
-| `psk` | 只解 MQTT presence，**不是** chat 密钥 |
-| `key`（`PROXY_KEY`） | 打 `*.cnb.run` 时的 Bearer，和现在客户端一样 |
-| `metadata.baseURL` | 最近一次解密到的 `https://<sub>-9001.cnb.run` |
-
-不在第一期做「一把 master key 发现全部实例」。
+| MQTT × 1 topic | 实例 id、动态域名、API Key、up/down、时间戳 |
+| HTTPS | chat、SSE、`/v1/models`、`/usage` |
 
 ---
 
-## 4. Magpie 钩子
+## 2. Topic 怎么「固定」
 
-供应商 id：`cnb2api`（避开内置名）。
-`npm: "@ai-sdk/openai-compatible"`，Magpie 已把任意 Agent API 转成
-`/v1/chat/completions`。
+插件侧只有一个订阅，名字对整个舰队恒定。不要写成公开字面量
+`cnb2api/presence`（共用 Broker 上谁都能盯着密文刷）。
+
+用**舰队密钥**派生一次：
 
 ```
-package.json
-  main / exports["./server"]: ./plugin/index.mjs
-  keywords: [opencode, opencode-plugin, cnb]
-  magpie.maxConcurrency: 2
-  scripts.start: node src/server.mjs
+fleet = base64url( HMAC-SHA256(psk, "cnb2api/mqtt/v1/fleet") [0:16] )
+topic = cnb2api/v1/{fleet}/presence
 ```
 
-`authorize`：用 PSK 订 presence，解开一条合法 URI（或超时失败）。
-顺手 `GET {uri}/health` 确认端口代理活着。
+同一把 PSK → 同一条 topic。插件登录时只拿 Broker + PSK；
+工作区配同一把 `MQTT_PSK`。没有第三份「topic 配置」。
 
-`loader.fetch`：
+登录 prompt：
 
-1. `getAuth()` 取 `PROXY_KEY` + 缓存的 `baseURL`
-2. 若 MQTT 推来了新 URI，写成 `metadata.baseURL`（`client.auth.set` 合并）
-3. **普通 `fetch(https://<sub>-9001.cnb.run/v1/…)`**，带 Bearer，
-   流式 `Response` 原样返回
-4. 连接失败 / 超时 → 等下一条 presence，或让 Magpie 切号
+- Broker URL（可有共用默认值）
+- 舰队 PSK（`type: "password"`）
 
-`provider.models` / `auth.usage`：同样 HTTPS 打当前 `baseURL` 的
-`/v1/models`、`/usage`。MQTT 不传这些。
+`authorize` 订上这条 topic，在几秒内收到至少一条能解开、URI 合法的
+心跳即成功；超时则 `{ type: "failed" }`。`accountId` 用 `fleet` 短哈希，
+重登同一把 PSK 覆盖同一个 Magpie 账号。
 
 ---
 
-## 5. MQTT 消息（很小）
+## 3. 为什么不能 retained
 
-Topic（不可猜）：
+MQTT retained **按 topic 只留最后一条**。多实例共用一条 topic 时，
+后上线的会盖掉先上线的，插件重启只能看到一个人。
+
+所以：**不设 retained**。每个实例周期性 publish（建议 15–30s），
+插件按 `instanceId` 做表，超过 2–3 个心跳没来的视为下线。
 
 ```
-ns = base64url( HMAC-SHA256(psk, "cnb2api/mqtt/v1/" + instanceId) [0:16] )
-cnb2api/v1/{ns}/presence      retained, QoS 1
+instances: Map<instanceId, { uri, apiKey, bootId, lastSeen, status }>
 ```
 
-明文（加密前），大约几百字节：
+进程退出可再发一条 `{ status: "down", instanceId }`，没有也没关系，
+靠 TTL 收尸。
+
+---
+
+## 4. 元数据（明文，发出前加密）
 
 ```json
 {
   "v": 1,
+  "instanceId": "ws-home",
   "status": "up",
   "uri": "https://abcd1234-9001.cnb.run",
+  "apiKey": "<PROXY_KEY>",
   "bootId": "…",
   "ts": 1730000000
 }
 ```
 
-关机或进程退出：`{ "status": "down", "ts": … }`，清掉 retained。
-**没有 req/res/abort，没有分片，没有 chat 帧。**
+- `uri`：现有 `CNB_VSCODE_PROXY_URI`，正则仍与 `cnb-register.py` 相同，
+  不匹配整条丢弃（防伪造把流量拐走）。
+- `apiKey`：工作区自己的 `PROXY_KEY`。插件登录不再问 Key，
+  HTTP 请求头用报文里这份。
+- `instanceId`：工作区自己起的名字，表的主键；重复则视为同一实例刷新。
 
-加密：`HKDF-SHA256(psk, salt="cnb2api-mqtt-v1", info=instanceId)` →
-AES-256-GCM。AAD 绑 topic。丢弃 `|now-ts| > 120s` 的帧。
-PSK 每实例一把。
+加密：`HKDF-SHA256(psk, salt="cnb2api-mqtt-v1", info="fleet")` →
+AES-256-GCM。AAD 绑 topic。`|now-ts| > 120s` 丢弃。
 
-URI 仍用现在的正则闸门（与 `cnb-register.py` 相同）：
+同一把舰队 PSK 的实例能互相解密——这是共用 topic 的代价，可接受。
+Broker 运营方看不到域名和 Key。
 
-```
-^https://([a-z0-9]+)-(?:\{\{port\}\}|[0-9]+)\.cnb\.run$
-```
-
-不匹配就丢。防止伪造 presence 把插件拐到任意主机（否则
-`PROXY_KEY` 和对话会跟过去）。
-
-工作区侧：`start.sh` / 进程内在 HTTP listen 成功后 publish 一次；
-子域名不变就只靠 retained + 30s 心跳刷新 `ts`。这替代
-`REGISTER_URL` + `X-Reg-Token`。`CNB_TOKEN` 不出工作区。
-
----
-
-## 6. 工作区改动
-
-新环境变量（可选）：
+工作区环境变量：
 
 ```
 MQTT_BROKER=wss://broker.example.com/mqtt
-MQTT_INSTANCE_ID=…
-MQTT_PSK=…
+MQTT_PSK=…                 # 和 Magpie 登录同一把
+MQTT_INSTANCE_ID=ws-home   # 舰队内唯一
+# PROXY_KEY 已有，打进心跳
 ```
 
-配齐则向 Broker 发 presence，**不改变 HTTP 服务**。
-`REGISTER_URL` 仍可用，两套控制面可以同时开。
+---
 
-手写最小 MQTT 3.1.1 客户端即可（消息就一条）。出站优先 WSS/443。
+## 5. 插件怎么用这张表
 
-`cnb-register.py`、`DEPLOY.md`、`cnb-watchdog.sh` 不删。
-还要给 Cursor / Claude Code / New API 固定域名的人继续走 nginx。
+一次登录 = 一个 Magpie 账号 = 一支舰队。发现到的实例是账号内部状态，
+**不要**给每个实例再 `client.auth.set` 成独立账号（Magpie 账号是登录时
+创建的，MQTT 上后出现的实例对不上）。
+
+`loader.fetch`：
+
+1. 从表里挑一个 `status=up` 且未过期的实例（先最近成功的，再最新鲜的）
+2. `fetch(${uri}${path}, { Authorization: Bearer ${apiKey}, ... })`
+3. 连不上 / 5xx → 标坏，换下一个；都失败再把 502/504 交回 Magpie
+
+`provider.models`：问一个活实例的 `/v1/models`，失败退回 `config` 默认列表。
+`auth.usage`：问一个活实例的 `/usage`（第一期不跨实例加总）。
+
+连接：插件进程里 **一条** MQTT 连接、 **一个** 订阅，按 `instanceId` 拆表。
+不要按实例建连接。
+
+---
+
+## 6. 和旧中继的关系
+
+| | nginx + `cnb-register.py` | 本插件 |
+|---|---|---|
+| 控制面 | 每中继一个 URI，POST `/ops/register` | 一条 topic，多实例心跳 |
+| 数据面 | HTTPS → 固定域名 → 当前子域名 | HTTPS → 插件刚学到的子域名 |
+| 凭证 | 客户端自己配 `PROXY_KEY` | Key 跟 URI 一起从心跳来 |
+
+两套可以同时开。不配 `MQTT_*` 的工作区行为与现在完全一样。
 
 ---
 
@@ -171,20 +155,22 @@ MQTT_PSK=…
 
 | 威胁 | 对策 |
 |---|---|
-| Broker 运营方读对话 | 对话根本不进 MQTT |
-| 他人看到你的当前子域名 | presence 加密 + topic = HMAC(psk) |
-| 伪造 URI 把流量拐走 | AES-GCM 认证 + `*.cnb.run` 正则 |
-| 重放已回收的旧 URI | ts 窗口；HTTPS 失败则等新 presence / 切号 |
-| `PROXY_KEY` 泄漏 | 只存在 Magpie `plugin-auth.json`，不进 MQTT |
-| `CNB_TOKEN` 外泄 | 永远不出工作区 |
+| Broker 读对话 | 对话不进 MQTT |
+| Broker 读到域名 / API Key | 整包 AES-GCM |
+| 他人订到你的 topic | topic 由 PSK 派生，不可猜 |
+| 伪造 URI / 换 Key | 解不开或 URI 正则失败则丢 |
+| 重放已回收的旧 URI | ts 窗口；HTTPS 失败换实例 |
+| 舰队 PSK 泄漏 | 等于拿到所有实例的域名和 Key，只能换 PSK |
+
+`CNB_TOKEN` 仍然不出工作区。
 
 ---
 
 ## 8. 落地顺序
 
-1. 工作区：开机 / 心跳 publish 加密 presence（URI + up/down）
-2. 插件：登录、订 presence、校验 URI、HTTPS `fetch` 当前域名
-3. 多账号登录 + Magpie 切号
-4. 文档：对照「MQTT = 新 register；chat = 原 HTTPS」
+1. 工作区：心跳 publish `{instanceId, uri, apiKey}` 到舰队 topic
+2. 插件：单订阅、内存表、TTL、HTTPS `fetch` 选实例
+3. 多实例同时在线时的选路 / 失败换人
+4. 文档：PSK 怎么分发、`MQTT_INSTANCE_ID` 不要撞名
 
-不在范围：SSE over MQTT、4MiB 分片、插件自己做加权池、删掉 nginx 中继。
+不在范围：每实例一条 topic、SSE over MQTT、删掉 nginx 中继。
